@@ -10,19 +10,28 @@ resize();
 
 const colors = ['#2e7d32', '#66bb6a', '#1565c0', '#ec407a', '#ffca28', '#26c6da'];
 const emojis = ['🧬', '🍃', '🔬', '🐸'];
+const MAX_PARTICLES = 240;
 let particles = [];
 
-function spawnBurst(count = 140) {
+function spawnBurst(count = 100) {
+  // Drop the oldest particles instead of letting the array grow unbounded
+  // when the button is clicked repeatedly before earlier bursts finish falling.
+  const overflow = particles.length + count - MAX_PARTICLES;
+  if (overflow > 0) particles.splice(0, overflow);
+
   for (let i = 0; i < count; i++) {
     const useEmoji = Math.random() < 0.15;
+    const size = 6 + Math.random() * 8;
     particles.push({
       x: Math.random() * canvas.width,
       y: -20 - Math.random() * canvas.height * 0.3,
       vx: (Math.random() - 0.5) * 3,
       vy: 2 + Math.random() * 3,
-      size: 6 + Math.random() * 8,
+      size,
+      halfSize: size / 2,
       color: colors[Math.floor(Math.random() * colors.length)],
       emoji: useEmoji ? emojis[Math.floor(Math.random() * emojis.length)] : null,
+      font: useEmoji ? `${size * 2}px sans-serif` : null,
       rotation: Math.random() * 360,
       rotationSpeed: (Math.random() - 0.5) * 8,
       life: 0,
@@ -32,32 +41,43 @@ function spawnBurst(count = 140) {
 }
 
 function tick() {
+  // Reset transform before clearing/drawing since per-particle setTransform
+  // below leaves the matrix dirty from the previous frame.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = 'center';
 
-  particles = particles.filter(p => p.life < p.maxLife && p.y < canvas.height + 40);
-
-  for (const p of particles) {
+  // Compact the array in place (swap-write) instead of allocating a new
+  // array via filter() every frame — cuts GC churn substantially.
+  let writeIndex = 0;
+  for (let readIndex = 0; readIndex < particles.length; readIndex++) {
+    const p = particles[readIndex];
     p.x += p.vx;
     p.y += p.vy;
     p.vy += 0.02;
     p.rotation += p.rotationSpeed;
     p.life++;
 
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate((p.rotation * Math.PI) / 180);
+    if (p.life >= p.maxLife || p.y >= canvas.height + 40) continue;
+
+    const rad = (p.rotation * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    // setTransform(translate+rotate) in one call avoids the save/rotate/restore
+    // stack overhead per particle, which was the main lag source with 100s of particles.
+    ctx.setTransform(cos, sin, -sin, cos, p.x, p.y);
 
     if (p.emoji) {
-      ctx.font = `${p.size * 2}px sans-serif`;
-      ctx.textAlign = 'center';
+      ctx.font = p.font;
       ctx.fillText(p.emoji, 0, 0);
     } else {
       ctx.fillStyle = p.color;
-      ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
+      ctx.fillRect(-p.halfSize, -p.halfSize, p.size, p.size * 0.6);
     }
 
-    ctx.restore();
+    particles[writeIndex++] = p;
   }
+  particles.length = writeIndex;
 
   requestAnimationFrame(tick);
 }
@@ -112,5 +132,5 @@ document.getElementById('confetti-btn').addEventListener('click', () => {
   playFanfare();
 });
 
-spawnBurst(200);
+spawnBurst(160);
 tick();
